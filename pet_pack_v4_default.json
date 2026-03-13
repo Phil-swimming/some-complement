@@ -1,0 +1,43 @@
+{
+  "build_id": 20260305,
+  "acts": {},
+  "global": {
+    "story_phase_retry_ms": 6000,
+    "story_approach_base_ms": 16000,
+    "story_approach_per_px_ms": 260,
+    "story_approach_reserved": 0,
+    "story_approach_max_ms": 90000,
+    "story_interact_min_ms": 20000,
+    "story_interact_max_ms": 52000,
+    "story_chase_min_ms": 26000,
+    "story_chase_max_ms": 62000,
+    "story_leave_min_ms": 12000,
+    "story_leave_max_ms": 36000,
+    "story_end_next_wp_min_ms": 12000,
+    "story_end_next_wp_max_ms": 32000,
+    "story_end_next_act_min_ms": 18000,
+    "story_end_next_act_max_ms": 52000,
+    "next_env_min_ms": 15000,
+    "next_env_max_ms": 42000,
+    "butterfly_move_min_ms": 1200,
+    "butterfly_move_max_ms": 3200
+  },
+  "phrases": [
+    "hi",
+    "sniff",
+    "zzz",
+    "yay",
+    "hmm",
+    "ok",
+    "walk",
+    "play",
+    "good",
+    "wow",
+    "boop",
+    "chill",
+    "stretch",
+    "drink",
+    "eat",
+    "yawn"
+  ]
+}
