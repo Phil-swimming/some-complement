@@ -650,12 +650,34 @@ def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub)
     session = ConnectionSession(conn, addr)
     hub.set(session)
 
+    try:
+        conn.settimeout(1.0)
+    except OSError:
+        pass
+
+    try:
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:
+        pass
+
+    try:
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except OSError:
+        pass
+
     def heartbeat_sender() -> None:
         interval = max(heartbeat_ms, 50) / 1000.0
         while not stop_event.is_set():
             try:
                 session.send_heartbeat()
-            except OSError:
+            except OSError as exc:
+                if not stop_event.is_set():
+                    print(f"[tcp] heartbeat send failed: {exc}")
+                stop_event.set()
+                try:
+                    conn.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
                 break
             if stop_event.wait(interval):
                 break
@@ -664,8 +686,15 @@ def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub)
     sender.start()
 
     try:
-        while True:
-            chunk = conn.recv(4096)
+        while not stop_event.is_set():
+            try:
+                chunk = conn.recv(4096)
+            except (socket.timeout, TimeoutError):
+                continue
+            except OSError as exc:
+                print(f"[tcp] recv failed: {exc}")
+                break
+
             if not chunk:
                 break
             buf.extend(chunk)
@@ -713,6 +742,10 @@ def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub)
         stop_event.set()
         session.close()
         hub.clear(session)
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         conn.close()
         print(f"[tcp] client disconnected: {addr[0]}:{addr[1]}")
 
@@ -741,7 +774,10 @@ def serve_forever(host: str, tcp_port: int, udp_port: int, heartbeat_ms: int) ->
     try:
         while True:
             conn, addr = sock.accept()
-            handle_client(conn, addr, heartbeat_ms, hub)
+            try:
+                handle_client(conn, addr, heartbeat_ms, hub)
+            except Exception as exc:
+                print(f"[tcp] session handler error: {exc}")
     except KeyboardInterrupt:
         pass
     finally:
