@@ -649,11 +649,14 @@ def handle_client(
     heartbeat_ms: int,
     hub: SessionHub,
     heartbeat_before_hello: bool,
+    hello_timeout_ms: int,
 ) -> None:
     print(f"[tcp] client connected: {addr[0]}:{addr[1]}")
     buf = bytearray()
     stop_event = threading.Event()
     hello_event = threading.Event()
+    heartbeat_gate_forced = threading.Event()
+    connected_at = time.monotonic()
     session = ConnectionSession(conn, addr)
     hub.set(session)
 
@@ -676,9 +679,17 @@ def handle_client(
         interval = max(heartbeat_ms, 50) / 1000.0
         while not stop_event.is_set():
             if not heartbeat_before_hello and not hello_event.is_set():
+                if (
+                    hello_timeout_ms > 0
+                    and not heartbeat_gate_forced.is_set()
+                    and ((time.monotonic() - connected_at) * 1000.0) >= float(hello_timeout_ms)
+                ):
+                    heartbeat_gate_forced.set()
+                    print(f"[tcp] hello timeout fallback heartbeat after {hello_timeout_ms} ms")
                 if stop_event.wait(0.05):
                     break
-                continue
+                if not heartbeat_gate_forced.is_set():
+                    continue
             try:
                 session.send_heartbeat()
             except OSError as exc:
@@ -697,7 +708,7 @@ def handle_client(
     if heartbeat_before_hello:
         print("[tcp] heartbeat mode: immediate")
     else:
-        print("[tcp] heartbeat mode: wait hello")
+        print(f"[tcp] heartbeat mode: wait hello fallback={hello_timeout_ms}ms")
     sender.start()
 
     try:
@@ -745,7 +756,7 @@ def handle_client(
                 if msg_type == MSG_HELLO:
                     if not hello_event.is_set():
                         hello_event.set()
-                        if not heartbeat_before_hello:
+                        if not heartbeat_before_hello and not heartbeat_gate_forced.is_set():
                             print("[tcp] heartbeat gate open")
                     print(f"[hello] seq={seq} {hello_summary(payload)}")
                 elif msg_type == MSG_ACK:
@@ -775,6 +786,7 @@ def serve_forever(
     udp_port: int,
     heartbeat_ms: int,
     heartbeat_before_hello: bool,
+    hello_timeout_ms: int,
 ) -> None:
     stop_event = threading.Event()
     hub = SessionHub()
@@ -800,7 +812,7 @@ def serve_forever(
         while True:
             conn, addr = sock.accept()
             try:
-                handle_client(conn, addr, heartbeat_ms, hub, heartbeat_before_hello)
+                handle_client(conn, addr, heartbeat_ms, hub, heartbeat_before_hello, hello_timeout_ms)
             except Exception as exc:
                 print(f"[tcp] session handler error: {exc}")
     except KeyboardInterrupt:
@@ -822,6 +834,12 @@ def main() -> None:
         action="store_true",
         help="send heartbeat immediately after TCP connect instead of waiting for HELLO",
     )
+    parser.add_argument(
+        "--hello-timeout-ms",
+        type=int,
+        default=1500,
+        help="when waiting for HELLO, start heartbeat fallback after this timeout; 0 disables fallback",
+    )
     args = parser.parse_args()
 
     serve_forever(
@@ -830,6 +848,7 @@ def main() -> None:
         args.udp_port,
         args.heartbeat_ms,
         args.heartbeat_before_hello,
+        args.hello_timeout_ms,
     )
 
 

@@ -389,6 +389,61 @@ tryget_socket(int s)
   return &sockets[s];
 }
 
+#if LWIP_TCP
+int
+lwip_socket_get_debug_info(int s, struct lwip_socket_debug_info *info)
+{
+  struct lwip_sock *sock;
+
+  if (info == NULL) {
+    return -1;
+  }
+
+  memset(info, 0, sizeof(*info));
+  sock = tryget_socket(s);
+  if (sock == NULL) {
+    return -1;
+  }
+
+  info->active = 1;
+  info->sendevent = sock->sendevent;
+  info->sock_err = (s16_t)sock->err;
+  if (sock->conn == NULL) {
+    return 0;
+  }
+
+  info->conn_state = (u8_t)sock->conn->state;
+  info->conn_flags = sock->conn->flags;
+  info->conn_last_err = (s16_t)sock->conn->last_err;
+  info->netconn_nonblocking = netconn_is_nonblocking(sock->conn) ? 1 : 0;
+#if LWIP_SO_SNDTIMEO
+  info->send_timeout = sock->conn->send_timeout;
+#endif
+#if LWIP_SO_RCVTIMEO
+  info->recv_timeout = sock->conn->recv_timeout;
+#endif
+
+  if (NETCONNTYPE_GROUP(netconn_type(sock->conn)) == NETCONN_TCP) {
+    struct tcp_pcb *pcb = sock->conn->pcb.tcp;
+
+    info->is_tcp = 1;
+    if (pcb != NULL) {
+      info->pcb_state = (u8_t)pcb->state;
+      info->snd_buf = (u32_t)pcb->snd_buf;
+      info->snd_wnd = (u32_t)pcb->snd_wnd;
+      info->snd_wnd_max = (u32_t)pcb->snd_wnd_max;
+      info->snd_lbb = pcb->snd_lbb;
+      info->snd_nxt = pcb->snd_nxt;
+      info->snd_queuelen = pcb->snd_queuelen;
+      info->has_unsent = (pcb->unsent != NULL) ? 1 : 0;
+      info->has_unacked = (pcb->unacked != NULL) ? 1 : 0;
+    }
+  }
+
+  return 0;
+}
+#endif /* LWIP_TCP */
+
 /**
  * Allocate a new socket for a given netconn.
  *

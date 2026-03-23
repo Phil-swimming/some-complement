@@ -508,6 +508,32 @@ int lwip_select(int maxfdp1, fd_set *readset, fd_set *writeset, fd_set *exceptse
 int lwip_ioctl(int s, long cmd, void *argp);
 int lwip_fcntl(int s, int cmd, int val);
 
+#if LWIP_TCP
+struct lwip_socket_debug_info {
+  u8_t active;
+  u8_t is_tcp;
+  u8_t conn_state;
+  u8_t pcb_state;
+  u8_t netconn_nonblocking;
+  u8_t has_unsent;
+  u8_t has_unacked;
+  u16_t sendevent;
+  u16_t conn_flags;
+  s16_t sock_err;
+  s16_t conn_last_err;
+  s32_t send_timeout;
+  s32_t recv_timeout;
+  u32_t snd_buf;
+  u32_t snd_wnd;
+  u32_t snd_wnd_max;
+  u32_t snd_lbb;
+  u32_t snd_nxt;
+  u16_t snd_queuelen;
+};
+
+int lwip_socket_get_debug_info(int s, struct lwip_socket_debug_info *info);
+#endif /* LWIP_TCP */
+
 #if LWIP_COMPAT_SOCKETS
 #if LWIP_COMPAT_SOCKETS != 2
 /** @ingroup socket */

@@ -1516,6 +1516,11 @@ lwip_netconn_do_writemore(struct netconn *conn  WRITE_DELAYED_PARAM)
 
   apiflags = conn->current_msg->msg.w.apiflags;
   dontblock = netconn_is_nonblocking(conn) || (apiflags & NETCONN_DONTBLOCK);
+#if LWIP_SO_SNDTIMEO
+  if (conn->send_timeout != 0) {
+    dontblock = 1;
+  }
+#endif /* LWIP_SO_SNDTIMEO */
 
 #if LWIP_SO_SNDTIMEO
   if ((conn->send_timeout != 0) &&
