@@ -643,10 +643,17 @@ def run_console(hub: SessionHub, input_streamer: InputStreamer) -> None:
             print(f"[cmd] send failed: {exc}")
 
 
-def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub) -> None:
+def handle_client(
+    conn: socket.socket,
+    addr,
+    heartbeat_ms: int,
+    hub: SessionHub,
+    heartbeat_before_hello: bool,
+) -> None:
     print(f"[tcp] client connected: {addr[0]}:{addr[1]}")
     buf = bytearray()
     stop_event = threading.Event()
+    hello_event = threading.Event()
     session = ConnectionSession(conn, addr)
     hub.set(session)
 
@@ -668,6 +675,10 @@ def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub)
     def heartbeat_sender() -> None:
         interval = max(heartbeat_ms, 50) / 1000.0
         while not stop_event.is_set():
+            if not heartbeat_before_hello and not hello_event.is_set():
+                if stop_event.wait(0.05):
+                    break
+                continue
             try:
                 session.send_heartbeat()
             except OSError as exc:
@@ -683,6 +694,10 @@ def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub)
                 break
 
     sender = threading.Thread(target=heartbeat_sender, daemon=True)
+    if heartbeat_before_hello:
+        print("[tcp] heartbeat mode: immediate")
+    else:
+        print("[tcp] heartbeat mode: wait hello")
     sender.start()
 
     try:
@@ -728,6 +743,10 @@ def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub)
 
                 payload = frame[8:-2]
                 if msg_type == MSG_HELLO:
+                    if not hello_event.is_set():
+                        hello_event.set()
+                        if not heartbeat_before_hello:
+                            print("[tcp] heartbeat gate open")
                     print(f"[hello] seq={seq} {hello_summary(payload)}")
                 elif msg_type == MSG_ACK:
                     print(f"[ack]   seq={seq} {ack_summary(payload)}")
@@ -750,7 +769,13 @@ def handle_client(conn: socket.socket, addr, heartbeat_ms: int, hub: SessionHub)
         print(f"[tcp] client disconnected: {addr[0]}:{addr[1]}")
 
 
-def serve_forever(host: str, tcp_port: int, udp_port: int, heartbeat_ms: int) -> None:
+def serve_forever(
+    host: str,
+    tcp_port: int,
+    udp_port: int,
+    heartbeat_ms: int,
+    heartbeat_before_hello: bool,
+) -> None:
     stop_event = threading.Event()
     hub = SessionHub()
     input_streamer = InputStreamer(hub)
@@ -775,7 +800,7 @@ def serve_forever(host: str, tcp_port: int, udp_port: int, heartbeat_ms: int) ->
         while True:
             conn, addr = sock.accept()
             try:
-                handle_client(conn, addr, heartbeat_ms, hub)
+                handle_client(conn, addr, heartbeat_ms, hub, heartbeat_before_hello)
             except Exception as exc:
                 print(f"[tcp] session handler error: {exc}")
     except KeyboardInterrupt:
@@ -792,9 +817,20 @@ def main() -> None:
     parser.add_argument("--tcp-port", type=int, default=TCP_PORT)
     parser.add_argument("--udp-port", type=int, default=UDP_PORT)
     parser.add_argument("--heartbeat-ms", type=int, default=1000)
+    parser.add_argument(
+        "--heartbeat-before-hello",
+        action="store_true",
+        help="send heartbeat immediately after TCP connect instead of waiting for HELLO",
+    )
     args = parser.parse_args()
 
-    serve_forever(args.host, args.tcp_port, args.udp_port, args.heartbeat_ms)
+    serve_forever(
+        args.host,
+        args.tcp_port,
+        args.udp_port,
+        args.heartbeat_ms,
+        args.heartbeat_before_hello,
+    )
 
 
 if __name__ == "__main__":
