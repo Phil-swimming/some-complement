@@ -1151,6 +1151,24 @@ class WiFiControlPanel:
         self.steer_var = tk.DoubleVar(value=0.00)
         self.ack_log_var = tk.BooleanVar(value=self.ctx.output.is_visible("ack"))
         self.tlm_log_var = tk.BooleanVar(value=self.ctx.output.is_visible("tlm"))
+        self.global_tune_vars = {
+            "speed": tk.StringVar(value="30.0"),
+            "limit": tk.StringVar(value="180.0"),
+            "ramp": tk.StringVar(value="0.80"),
+            "tlimit": tk.StringVar(value="0.60"),
+        }
+        self.motor_tune_vars = {
+            "m0": {
+                "kp": tk.StringVar(value="0.00"),
+                "kw": tk.StringVar(value="0.10"),
+                "tff": tk.StringVar(value="0.00"),
+            },
+            "m1": {
+                "kp": tk.StringVar(value="0.00"),
+                "kw": tk.StringVar(value="0.10"),
+                "tff": tk.StringVar(value="0.00"),
+            },
+        }
 
         self.ctx.output.add_listener(self._on_log_event)
         self._build()
@@ -1244,7 +1262,7 @@ class WiFiControlPanel:
         tune_box = ttk.LabelFrame(self.root, text="Runtime Tuning", padding=10)
         tune_box.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
         tune_box.columnconfigure(0, weight=1)
-        tune_box.rowconfigure(2, weight=1)
+        tune_box.rowconfigure(3, weight=1)
 
         tune_controls = ttk.Frame(tune_box)
         tune_controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -1267,8 +1285,44 @@ class WiFiControlPanel:
         ttk.Label(telemetry_box, textvariable=self.motor_var, wraplength=1120).grid(row=1, column=0, sticky="w")
         ttk.Label(telemetry_box, textvariable=self.bus_var, wraplength=1120).grid(row=2, column=0, sticky="w")
 
+        bulk_tune_box = ttk.LabelFrame(tune_box, text="Full Parameter Panel", padding=10)
+        bulk_tune_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        bulk_tune_box.columnconfigure(0, weight=1)
+        bulk_tune_box.columnconfigure(1, weight=1)
+
+        global_box = ttk.LabelFrame(bulk_tune_box, text="Global", padding=10)
+        global_box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        for column in range(4):
+            global_box.columnconfigure(column, weight=1)
+        ttk.Label(global_box, text="Speed").grid(row=0, column=0, sticky="w")
+        ttk.Label(global_box, text="Limit").grid(row=0, column=1, sticky="w")
+        ttk.Label(global_box, text="Ramp").grid(row=0, column=2, sticky="w")
+        ttk.Label(global_box, text="TLimit").grid(row=0, column=3, sticky="w")
+        ttk.Entry(global_box, textvariable=self.global_tune_vars["speed"]).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
+        ttk.Entry(global_box, textvariable=self.global_tune_vars["limit"]).grid(row=1, column=1, sticky="ew", padx=2, pady=2)
+        ttk.Entry(global_box, textvariable=self.global_tune_vars["ramp"]).grid(row=1, column=2, sticky="ew", padx=2, pady=2)
+        ttk.Entry(global_box, textvariable=self.global_tune_vars["tlimit"]).grid(row=1, column=3, sticky="ew", padx=2, pady=2)
+        ttk.Button(global_box, text="Load Current", command=self._load_tuning_from_telemetry).grid(row=2, column=0, columnspan=2, sticky="ew", padx=2, pady=4)
+        ttk.Button(global_box, text="Apply Global", command=self._apply_global_tuning).grid(row=2, column=2, columnspan=2, sticky="ew", padx=2, pady=4)
+
+        motor_box = ttk.LabelFrame(bulk_tune_box, text="Per Motor", padding=10)
+        motor_box.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        for column in range(4):
+            motor_box.columnconfigure(column, weight=1)
+        ttk.Label(motor_box, text="Field").grid(row=0, column=0, sticky="w")
+        ttk.Label(motor_box, text="M0").grid(row=0, column=1, sticky="w")
+        ttk.Label(motor_box, text="M1").grid(row=0, column=2, sticky="w")
+        ttk.Label(motor_box, text="Action").grid(row=0, column=3, sticky="w")
+        for row, field in enumerate(("kp", "kw", "tff"), start=1):
+            ttk.Label(motor_box, text=field.upper()).grid(row=row, column=0, sticky="w")
+            ttk.Entry(motor_box, textvariable=self.motor_tune_vars["m0"][field]).grid(row=row, column=1, sticky="ew", padx=2, pady=2)
+            ttk.Entry(motor_box, textvariable=self.motor_tune_vars["m1"][field]).grid(row=row, column=2, sticky="ew", padx=2, pady=2)
+        ttk.Button(motor_box, text="Apply M0", command=lambda: self._apply_motor_tuning("m0")).grid(row=1, column=3, sticky="ew", padx=2, pady=2)
+        ttk.Button(motor_box, text="Apply M1", command=lambda: self._apply_motor_tuning("m1")).grid(row=2, column=3, sticky="ew", padx=2, pady=2)
+        ttk.Button(motor_box, text="Apply All", command=self._apply_all_tuning).grid(row=3, column=3, sticky="ew", padx=2, pady=2)
+
         log_box = ttk.LabelFrame(tune_box, text="Log", padding=10)
-        log_box.grid(row=2, column=0, sticky="nsew")
+        log_box.grid(row=3, column=0, sticky="nsew")
         log_box.columnconfigure(0, weight=1)
         log_box.rowconfigure(0, weight=1)
         self.log_text = scrolledtext.ScrolledText(log_box, wrap="word", height=18, font=("Consolas", 10))
@@ -1284,8 +1338,6 @@ class WiFiControlPanel:
         self.log_text.configure(state="normal")
         self.log_text.insert("end", text)
         self.log_text.see("end")
-        if int(self.log_text.index("end-1c").split(".")[0]) > 1200:
-            self.log_text.delete("1.0", "200.0")
         self.log_text.configure(state="disabled")
 
     def _clear_log(self) -> None:
@@ -1304,6 +1356,57 @@ class WiFiControlPanel:
 
     def _apply_tune(self) -> None:
         self._run_command(f"tune {self.tune_field_var.get()} {self.tune_value_var.get()} {self.tune_target_var.get()}")
+
+    def _parse_tune_value(self, var: tk.StringVar, label: str):
+        raw = var.get().strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            self.ctx.output.emit("cmd", f"[cmd] invalid {label}: {raw}")
+            return None
+
+    def _send_tune_value(self, field: str, value: float, target: str) -> None:
+        self._run_command(f"tune {field} {value:.3f} {target}")
+
+    def _load_tuning_from_telemetry(self) -> None:
+        snapshot = self.ctx.state.snapshot()
+        tlm_data = snapshot.get("last_tlm_data")
+        if not isinstance(tlm_data, dict):
+            self.ctx.output.emit("cmd", "[cmd] no telemetry available to load")
+            return
+
+        self.global_tune_vars["speed"].set(f"{tlm_data['speed_step']:.3f}")
+        self.global_tune_vars["limit"].set(f"{tlm_data['w_limit']:.3f}")
+        self.global_tune_vars["ramp"].set(f"{tlm_data['ramp_step']:.3f}")
+        self.global_tune_vars["tlimit"].set(f"{tlm_data['t_limit']:.3f}")
+
+        for motor_name, cmd in (("m0", tlm_data["cmds"][0]), ("m1", tlm_data["cmds"][1])):
+            self.motor_tune_vars[motor_name]["kp"].set(f"{cmd[1]:.3f}")
+            self.motor_tune_vars[motor_name]["kw"].set(f"{cmd[2]:.3f}")
+            self.motor_tune_vars[motor_name]["tff"].set(f"{cmd[5]:.3f}")
+
+        self.ctx.output.emit("cmd", "[cmd] tuning values loaded from telemetry")
+
+    def _apply_global_tuning(self) -> None:
+        for field in ("speed", "limit", "ramp", "tlimit"):
+            value = self._parse_tune_value(self.global_tune_vars[field], field)
+            if value is None:
+                continue
+            self._send_tune_value(field, value, "both")
+
+    def _apply_motor_tuning(self, motor_name: str) -> None:
+        for field in ("kp", "kw", "tff"):
+            value = self._parse_tune_value(self.motor_tune_vars[motor_name][field], f"{motor_name}.{field}")
+            if value is None:
+                continue
+            self._send_tune_value(field, value, motor_name)
+
+    def _apply_all_tuning(self) -> None:
+        self._apply_global_tuning()
+        self._apply_motor_tuning("m0")
+        self._apply_motor_tuning("m1")
 
     def _start_hold(self) -> None:
         self._run_command(
