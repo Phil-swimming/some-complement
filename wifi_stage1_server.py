@@ -282,6 +282,7 @@ def parse_telemetry(payload: bytes) -> dict:
 
 def telemetry_summary_from_data(data: dict) -> str:
     cmd0 = data["cmds"][0]
+    cmd1 = data["cmds"][1]
     fbk0 = data["fbks"][0]
     fbk1 = data["fbks"][1]
     close_summary = ""
@@ -302,6 +303,7 @@ def telemetry_summary_from_data(data: dict) -> str:
         f"speed={data['speed_step']:.1f}/{data['w_limit']:.1f} "
         f"ramp={data['ramp_step']:.2f} tlim={data['t_limit']:.2f} "
         f"m0_cmd(kp={cmd0[1]:.2f},kw={cmd0[2]:.2f},w={cmd0[4]:+.2f},tff={cmd0[5]:+.2f}) "
+        f"m1_cmd(kp={cmd1[1]:.2f},kw={cmd1[2]:.2f},w={cmd1[4]:+.2f},tff={cmd1[5]:+.2f}) "
         f"m0_fbk(w={fbk0[6]:+.2f},t={fbk0[7]:+.2f},temp={fbk0[3]}) "
         f"m1_fbk(w={fbk1[6]:+.2f},t={fbk1[7]:+.2f},temp={fbk1[3]}) "
         f"rs485(ok={data['rs485_rx_ok_cnt']},crc={data['rs485_rx_crc_err_cnt']},txe={data['rs485_tx_err_cnt']}) "
