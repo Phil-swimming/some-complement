@@ -84,6 +84,33 @@ SELECTION_NAMES = {
     2: "both",
 }
 
+CLOSE_REASON_NAMES = {
+    0: "none",
+    1: "generic",
+    2: "netif_down",
+    3: "ip_invalid",
+    4: "send_partial_zero",
+    5: "send_partial_busy",
+    6: "send_fail",
+    7: "recv_select_fail",
+    8: "peer_closed",
+    9: "recv_fail",
+}
+
+
+def close_reason_name(code: int) -> str:
+    return CLOSE_REASON_NAMES.get(code, str(code))
+
+
+def format_last_close(data: dict, prefix: str = "close=") -> str:
+    reason = int(data.get("last_close_reason", 0) or 0)
+    if reason == 0:
+        return ""
+    errno_val = int(data.get("last_close_errno", 0) or 0)
+    soerr_val = int(data.get("last_close_soerr", 0) or 0)
+    tick_val = int(data.get("last_close_tick", 0) or 0)
+    return f"{prefix}{close_reason_name(reason)}/{errno_val}/{soerr_val}@{tick_val}"
+
 
 def crc16_ccitt(data: bytes) -> int:
     crc = 0xFFFF
@@ -158,6 +185,20 @@ def parse_telemetry(payload: bytes) -> dict:
     offset += 2
     data["last_tx_len"] = read_le_u16(payload, offset)
     offset += 2
+
+    data["last_close_reason"] = 0
+    data["last_close_errno"] = 0
+    data["last_close_soerr"] = 0
+    data["last_close_tick"] = 0
+    if len(payload) >= 208:
+        data["last_close_reason"] = payload[offset]
+        offset += 2
+        data["last_close_errno"] = read_le_u16(payload, offset)
+        offset += 2
+        data["last_close_soerr"] = read_le_u16(payload, offset)
+        offset += 4
+        data["last_close_tick"] = read_le_u32(payload, offset)
+        offset += 4
 
     data["input_src"] = payload[offset]
     data["ctrl_mode"] = payload[offset + 1]
@@ -243,6 +284,10 @@ def telemetry_summary_from_data(data: dict) -> str:
     cmd0 = data["cmds"][0]
     fbk0 = data["fbks"][0]
     fbk1 = data["fbks"][1]
+    close_summary = ""
+    close_text = format_last_close(data)
+    if close_text:
+        close_summary = f" {close_text}"
 
     return (
         f"tick={data['tick_ms']}ms backend={data['backend']} link={data['link_state']} "
@@ -250,7 +295,8 @@ def telemetry_summary_from_data(data: dict) -> str:
         f"ap={data['ap6181_state']} err=0x{data['ap6181_last_err']:02X} "
         f"cfg={'OK' if data['profile_cfg_ok'] else 'E'+str(data['profile_cfg_err'])} "
         f"local={data['local_ip']} server={data['server_ip']}:{data['server_port']} "
-        f"last_tx_len={data['last_tx_len']} src={data['input_src']} mode={data['ctrl_mode']} "
+        f"last_tx_len={data['last_tx_len']}{close_summary} "
+        f"src={data['input_src']} mode={data['ctrl_mode']} "
         f"sel={data['sel']} en=0x{data['en_mask']:02X} "
         f"thr={data['in_throttle']:+.2f} steer={data['in_steer']:+.2f} "
         f"speed={data['speed_step']:.1f}/{data['w_limit']:.1f} "
@@ -776,6 +822,23 @@ def emit_status(ctx: ServerContext) -> None:
     else:
         ctx.output.emit("cmd", "[cmd] hold inactive")
 
+    tlm_data = snapshot.get("last_tlm_data")
+    if isinstance(tlm_data, dict):
+        ctx.output.emit(
+            "cmd",
+            (
+                f"[cmd] tlm src={INPUT_SOURCE_NAMES.get(tlm_data['input_src'], tlm_data['input_src'])} "
+                f"mode={CTRL_MODE_NAMES.get(tlm_data['ctrl_mode'], tlm_data['ctrl_mode'])} "
+                f"sel={SELECTION_NAMES.get(tlm_data['sel'], tlm_data['sel'])} "
+                f"en=0x{tlm_data['en_mask']:02X}"
+            ),
+        )
+        close_text = format_last_close(tlm_data, prefix="")
+        if close_text:
+            ctx.output.emit("cmd", f"[cmd] last close {close_text}")
+    else:
+        ctx.output.emit("cmd", "[cmd] telemetry waiting")
+
 
 def execute_command(line: str, ctx: ServerContext) -> bool:
     try:
@@ -1135,17 +1198,18 @@ class WiFiControlPanel:
         self.hold_var = tk.StringVar(value="Hold: inactive")
         self.hello_var = tk.StringVar(value="HELLO: waiting")
         self.ack_var = tk.StringVar(value="ACK: waiting")
+        self.close_var = tk.StringVar(value="Close: none recorded")
         self.telemetry_var = tk.StringVar(value="Telemetry: waiting")
         self.motor_var = tk.StringVar(value="Motor: waiting")
         self.bus_var = tk.StringVar(value="Bus: waiting")
 
         self.mode_var = tk.StringVar(value="diff")
-        self.selection_var = tk.StringVar(value="both")
+        self.selection_var = tk.StringVar(value="m1")
         self.source_var = tk.StringVar(value="wifi")
-        self.enable_var = tk.StringVar(value="both")
+        self.enable_var = tk.StringVar(value="m1")
         self.tune_field_var = tk.StringVar(value="speed")
         self.tune_value_var = tk.StringVar(value="30")
-        self.tune_target_var = tk.StringVar(value="both")
+        self.tune_target_var = tk.StringVar(value="m1")
         self.period_var = tk.StringVar(value="50")
         self.throttle_var = tk.DoubleVar(value=0.00)
         self.steer_var = tk.DoubleVar(value=0.00)
@@ -1195,6 +1259,7 @@ class WiFiControlPanel:
         ttk.Label(status_box, textvariable=self.hold_var).grid(row=3, column=0, sticky="w")
         ttk.Label(status_box, textvariable=self.hello_var, wraplength=1120).grid(row=4, column=0, sticky="w")
         ttk.Label(status_box, textvariable=self.ack_var, wraplength=1120).grid(row=5, column=0, sticky="w")
+        ttk.Label(status_box, textvariable=self.close_var, wraplength=1120).grid(row=6, column=0, sticky="w")
 
         control = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         control.grid(row=1, column=0, sticky="ew")
@@ -1205,8 +1270,8 @@ class WiFiControlPanel:
         quick_box.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         for column in range(4):
             quick_box.columnconfigure(column, weight=1)
-        ttk.Button(quick_box, text="WiFi Takeover", command=lambda: self._run_command("mode diff both wifi")).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
-        ttk.Button(quick_box, text="Enable Both", command=lambda: self._run_command("enable both")).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
+        ttk.Button(quick_box, text="WiFi M1", command=lambda: self._run_command("mode diff m1 wifi")).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        ttk.Button(quick_box, text="Enable M1", command=lambda: self._run_command("enable m1")).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
         ttk.Button(quick_box, text="Disable All", command=lambda: self._run_command("enable off")).grid(row=0, column=2, sticky="ew", padx=2, pady=2)
         ttk.Button(quick_box, text="Status", command=lambda: self._run_command("status")).grid(row=0, column=3, sticky="ew", padx=2, pady=2)
         ttk.Button(quick_box, text="Zero Hold", command=lambda: self._run_command("hold 0.00 0.00 50")).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
@@ -1468,6 +1533,7 @@ class WiFiControlPanel:
 
         tlm_data = snapshot["last_tlm_data"]
         if isinstance(tlm_data, dict):
+            close_text = format_last_close(tlm_data, prefix="")
             fbk0 = tlm_data["fbks"][0]
             fbk1 = tlm_data["fbks"][1]
             self.telemetry_var.set(
@@ -1481,20 +1547,24 @@ class WiFiControlPanel:
                     f"speed={tlm_data['speed_step']:.1f}/{tlm_data['w_limit']:.1f} ramp={tlm_data['ramp_step']:.2f}"
                 )
             )
+            self.close_var.set(f"Close: {close_text}" if close_text else "Close: none recorded")
             self.motor_var.set(
                 (
                     f"Motor: m0 w={fbk0[6]:+.2f} t={fbk0[7]:+.2f} temp={fbk0[3]} "
                     f"| m1 w={fbk1[6]:+.2f} t={fbk1[7]:+.2f} temp={fbk1[3]}"
                 )
             )
+            close_suffix = f" {close_text}" if close_text else ""
             self.bus_var.set(
                 (
                     "Bus: "
                     f"rs485 ok={tlm_data['rs485_rx_ok_cnt']} crc={tlm_data['rs485_rx_crc_err_cnt']} "
                     f"txe={tlm_data['rs485_tx_err_cnt']} recover={tlm_data['recover_req']}/{tlm_data['recover_run']}"
+                    f"{close_suffix}"
                 )
             )
         else:
+            self.close_var.set("Close: waiting")
             self.telemetry_var.set("Telemetry: " + (snapshot["last_tlm"] if snapshot["last_tlm"] else "waiting"))
             self.motor_var.set("Motor: waiting")
             self.bus_var.set("Bus: waiting")
