@@ -101,6 +101,75 @@ function Test-DirectoryReadable {
   }
 }
 
+function Get-UserHomeCandidates {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectFullPath
+  )
+
+  $candidates = @(
+    $env:USERPROFILE,
+    $env:HOME,
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+  )
+
+  $projectUserMatch = [regex]::Match($ProjectFullPath, '^(?<root>[A-Za-z]:\\Users\\[^\\]+)\\')
+  if ($projectUserMatch.Success) {
+    $candidates += $projectUserMatch.Groups["root"].Value
+  }
+
+  $resolved = @()
+  foreach ($candidate in $candidates) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+      continue
+    }
+
+    if (Test-Path $candidate) {
+      $fullPath = [System.IO.Path]::GetFullPath((Resolve-Path $candidate).Path)
+      if ($resolved -notcontains $fullPath) {
+        $resolved += $fullPath
+      }
+    }
+  }
+
+  return $resolved
+}
+
+function Initialize-WindowsEnvironmentDefaults {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectFullPath
+  )
+
+  $projectDrive = [System.IO.Path]::GetPathRoot($ProjectFullPath)
+  if (-not [string]::IsNullOrWhiteSpace($projectDrive)) {
+    $projectDrive = $projectDrive.TrimEnd('\')
+  }
+
+  if ([string]::IsNullOrWhiteSpace($env:SystemDrive)) {
+    if ([string]::IsNullOrWhiteSpace($projectDrive)) {
+      $env:SystemDrive = "C:"
+    } else {
+      $env:SystemDrive = $projectDrive
+    }
+  }
+
+  if ([string]::IsNullOrWhiteSpace($env:ProgramData)) {
+    $env:ProgramData = (Join-Path $env:SystemDrive "ProgramData")
+  }
+
+  if ([string]::IsNullOrWhiteSpace($env:SystemRoot)) {
+    $windowsPath = Join-Path $env:SystemDrive "Windows"
+    if (Test-Path $windowsPath) {
+      $env:SystemRoot = $windowsPath
+    }
+  }
+
+  if ([string]::IsNullOrWhiteSpace($env:windir) -and -not [string]::IsNullOrWhiteSpace($env:SystemRoot)) {
+    $env:windir = $env:SystemRoot
+  }
+}
+
 $projectFullPath = Resolve-NormalizedPath -PathValue $ProjectPath
 $projectInfo = Get-ProjectOutputInfo -ProjectFullPath $projectFullPath
 
@@ -108,15 +177,34 @@ if (-not (Test-Path $Uv4Path)) {
   throw "未找到 UV4.exe: $Uv4Path"
 }
 
-$userHome = $env:USERPROFILE
-$packChecks = @(
-  @{ Name = "ARM::CMSIS"; Path = (Join-Path $userHome "AppData\Local\Arm\Packs\ARM\CMSIS") },
-  @{ Name = "Keil::STM32H7xx_DFP"; Path = (Join-Path $userHome "AppData\Local\Arm\Packs\Keil\STM32H7xx_DFP") }
-)
+Initialize-WindowsEnvironmentDefaults -ProjectFullPath $projectFullPath
 
-foreach ($packCheck in $packChecks) {
-  if (-not (Test-DirectoryReadable -PathValue $packCheck.Path)) {
-    Write-Warning ("无法读取 Pack 目录: {0} ({1})。如果后续出现 RTE / pack is not installed 错误，先运行 .\\tools\\setup_codex_windows_access.ps1。" -f $packCheck.Name, $packCheck.Path)
+$userHomes = Get-UserHomeCandidates -ProjectFullPath $projectFullPath
+if (($null -eq $userHomes) -or ($userHomes.Count -eq 0)) {
+  Write-Warning "无法解析用户主目录，跳过 Arm Pack 预检查。"
+} else {
+  $packChecks = @(
+    @{ Name = "ARM::CMSIS"; RelativePath = "AppData\Local\Arm\Packs\ARM\CMSIS" },
+    @{ Name = "Keil::STM32H7xx_DFP"; RelativePath = "AppData\Local\Arm\Packs\Keil\STM32H7xx_DFP" }
+  )
+
+  foreach ($packCheck in $packChecks) {
+    $readable = $false
+    $candidatePaths = @()
+
+    foreach ($userHome in $userHomes) {
+      $candidatePath = Join-Path $userHome $packCheck.RelativePath
+      $candidatePaths += $candidatePath
+
+      if (Test-DirectoryReadable -PathValue $candidatePath) {
+        $readable = $true
+        break
+      }
+    }
+
+    if (-not $readable) {
+      Write-Warning ("无法读取 Pack 目录: {0} ({1})。如果后续出现 RTE / pack is not installed 错误，先运行 .\\tools\\setup_codex_windows_access.ps1。" -f $packCheck.Name, ($candidatePaths -join "; "))
+    }
   }
 }
 
