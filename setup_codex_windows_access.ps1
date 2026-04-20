@@ -7,9 +7,7 @@ param(
   [switch]$NoCreateMissing,
   [switch]$SkipAclGrants,
   [switch]$SkipToolchainCaches,
-  [switch]$SkipGroupGrant,
-  [switch]$SkipArg0PowerShellWrappers,
-  [switch]$SyncArg0Wrappers
+  [switch]$SkipGroupGrant
 )
 
 $ErrorActionPreference = "Stop"
@@ -183,57 +181,6 @@ function Resolve-CodexHelperSource {
   } catch {
   }
 
-  foreach ($pathEntry in ($env:Path -split ';')) {
-    if ([string]::IsNullOrWhiteSpace($pathEntry)) {
-      continue
-    }
-
-    $candidate = $pathEntry.Trim()
-    if (Test-Path (Join-Path $candidate "codex.exe")) {
-      return $candidate
-    }
-  }
-
-  $windowsAppsRoots = @()
-  $programFilesCandidates = @(
-    [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles),
-    $env:ProgramW6432,
-    $env:ProgramFiles,
-    ${env:ProgramFiles(x86)}
-  )
-
-  if (-not [string]::IsNullOrWhiteSpace($env:SystemDrive)) {
-    $programFilesCandidates += (Join-Path $env:SystemDrive "Program Files")
-  }
-
-  $programFilesCandidates += "C:\Program Files"
-
-  foreach ($rootCandidate in $programFilesCandidates) {
-    if ([string]::IsNullOrWhiteSpace($rootCandidate)) {
-      continue
-    }
-
-    $windowsAppsRoot = Join-Path $rootCandidate "WindowsApps"
-    if (($windowsAppsRoots -notcontains $windowsAppsRoot) -and (Test-Path $windowsAppsRoot)) {
-      $windowsAppsRoots += $windowsAppsRoot
-    }
-  }
-
-  foreach ($windowsAppsRoot in $windowsAppsRoots) {
-    try {
-      $packageDirs = Get-ChildItem $windowsAppsRoot -Directory -Filter "OpenAI.Codex_*" -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending
-
-      foreach ($dir in $packageDirs) {
-        $candidate = Join-Path $dir.FullName "app\resources"
-        if (Test-Path (Join-Path $candidate "codex.exe")) {
-          return $candidate
-        }
-      }
-    } catch {
-    }
-  }
-
   return $null
 }
 
@@ -334,218 +281,7 @@ function Ensure-UserPathContains {
   }
 
   [Environment]::SetEnvironmentVariable("Path", $updatedPath, "User")
-  $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-  if ([string]::IsNullOrWhiteSpace($machinePath)) {
-    $env:PATH = $updatedPath
-  } else {
-    $env:PATH = $updatedPath + ";" + $machinePath
-  }
-}
-
-function ConvertTo-PowerShellSingleQuotedLiteral {
-  param(
-    [Parameter(Mandatory = $true)]
-    [AllowEmptyString()]
-    [string]$Value
-  )
-
-  return "'" + ($Value -replace "'", "''") + "'"
-}
-
-function Get-CodexEnvironmentDefaults {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$UserHome,
-    [Parameter(Mandatory = $true)]
-    [string]$WindowsRoot
-  )
-
-  $values = [ordered]@{}
-
-  $systemDrive = [System.IO.Path]::GetPathRoot($WindowsRoot)
-  if ([string]::IsNullOrWhiteSpace($systemDrive)) {
-    $systemDrive = [System.IO.Path]::GetPathRoot($UserHome)
-  }
-  if ([string]::IsNullOrWhiteSpace($systemDrive)) {
-    $systemDrive = "C:\"
-  }
-
-  $systemDrive = $systemDrive.TrimEnd("\")
-  $cmdPath = Join-Path $WindowsRoot "System32\cmd.exe"
-  $programData = Join-Path $systemDrive "ProgramData"
-  $appData = Join-Path $UserHome "AppData\Roaming"
-  $localAppData = Join-Path $UserHome "AppData\Local"
-  $tempPath = Join-Path $localAppData "Temp"
-
-  $homeDrive = [System.IO.Path]::GetPathRoot($UserHome)
-  if (-not [string]::IsNullOrWhiteSpace($homeDrive)) {
-    $homeDrive = $homeDrive.TrimEnd("\")
-  }
-
-  $homePath = $UserHome
-  if (-not [string]::IsNullOrWhiteSpace($homeDrive) -and $UserHome.StartsWith($homeDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
-    $homePath = $UserHome.Substring($homeDrive.Length)
-  }
-  if ([string]::IsNullOrWhiteSpace($homePath)) {
-    $homePath = "\"
-  }
-
-  $values["SystemDrive"] = $systemDrive
-  $values["SystemRoot"] = $WindowsRoot
-  $values["windir"] = $WindowsRoot
-  if (Test-Path $cmdPath) {
-    $values["ComSpec"] = $cmdPath
-  }
-  if (Test-Path $programData) {
-    $values["ProgramData"] = $programData
-  }
-  $values["USERPROFILE"] = $UserHome
-  $values["HOME"] = $UserHome
-  if (-not [string]::IsNullOrWhiteSpace($homeDrive)) {
-    $values["HOMEDRIVE"] = $homeDrive
-  }
-  $values["HOMEPATH"] = $homePath
-  if (Test-Path $appData) {
-    $values["APPDATA"] = $appData
-  }
-  if (Test-Path $localAppData) {
-    $values["LOCALAPPDATA"] = $localAppData
-  }
-  if (Test-Path $tempPath) {
-    $values["TEMP"] = $tempPath
-    $values["TMP"] = $tempPath
-  }
-
-  return $values
-}
-
-function New-PowerShellEnvironmentPrelude {
-  param(
-    [Parameter(Mandatory = $true)]
-    [System.Collections.IDictionary]$EnvironmentValues
-  )
-
-  $lines = @(
-    "`$ErrorActionPreference = 'Stop'"
-  )
-
-  foreach ($key in $EnvironmentValues.Keys) {
-    $value = [string]$EnvironmentValues[$key]
-    if ([string]::IsNullOrWhiteSpace($value)) {
-      continue
-    }
-
-    $lines += ('$env:{0} = {1}' -f $key, (ConvertTo-PowerShellSingleQuotedLiteral -Value $value))
-  }
-
-  return ($lines -join "`r`n") + "`r`n"
-}
-
-function New-PowerShellWrapperBodyForExecutable {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$TargetPath
-  )
-
-  $targetLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $TargetPath
-  return $script:CodexWrapperEnvironmentPrelude + @"
-& $targetLiteral @args
-exit `$LASTEXITCODE
-"@ -replace "`n", "`r`n"
-}
-
-function New-PowerShellWrapperBodyForBatchScript {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$TargetPath
-  )
-
-  $targetLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $TargetPath
-  return $script:CodexWrapperEnvironmentPrelude + @"
-& `$env:ComSpec /d /c call $targetLiteral @args
-exit `$LASTEXITCODE
-"@ -replace "`n", "`r`n"
-}
-
-function New-PowerShellWrapperBodyForPowerShellScript {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$TargetPath
-  )
-
-  $targetLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $TargetPath
-  return $script:CodexWrapperEnvironmentPrelude + @"
-& powershell -NoProfile -ExecutionPolicy Bypass -File $targetLiteral @args
-exit `$LASTEXITCODE
-"@ -replace "`n", "`r`n"
-}
-
-function New-PowerShellWrapperBodyForPythonModule {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$PythonExe,
-    [Parameter(Mandatory = $true)]
-    [string]$ModuleName
-  )
-
-  $pythonLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $PythonExe
-  return $script:CodexWrapperEnvironmentPrelude + @"
-& $pythonLiteral -m $ModuleName @args
-exit `$LASTEXITCODE
-"@ -replace "`n", "`r`n"
-}
-
-function New-PowerShellWrapperBodyForPythonScript {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$PythonExe,
-    [Parameter(Mandatory = $true)]
-    [string]$ScriptPath
-  )
-
-  $pythonLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $PythonExe
-  $scriptLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $ScriptPath
-  return $script:CodexWrapperEnvironmentPrelude + @"
-& $pythonLiteral $scriptLiteral @args
-exit `$LASTEXITCODE
-"@ -replace "`n", "`r`n"
-}
-
-function Sync-PowerShellWrappersToCodexArg0 {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$SourceDirectory,
-    [Parameter(Mandatory = $true)]
-    [string]$UserHome
-  )
-
-  $arg0Directories = Get-CodexArg0Directories -UserHome $UserHome
-  if ($arg0Directories.Count -eq 0) {
-    return 0
-  }
-
-  $wrapperFiles = Get-ChildItem $SourceDirectory -Filter *.ps1 -File -ErrorAction SilentlyContinue |
-    Sort-Object Name
-
-  if ($null -eq $wrapperFiles -or $wrapperFiles.Count -eq 0) {
-    return 0
-  }
-
-  $syncedDirectoryCount = 0
-  foreach ($arg0Directory in $arg0Directories) {
-    if (-not (Test-Path $arg0Directory)) {
-      continue
-    }
-
-    foreach ($wrapperFile in $wrapperFiles) {
-      $destinationPath = Join-Path $arg0Directory $wrapperFile.Name
-      Sync-FileIfNeeded -SourcePath $wrapperFile.FullName -DestinationPath $destinationPath
-    }
-
-    $syncedDirectoryCount++
-  }
-
-  return $syncedDirectoryCount
+  $env:PATH = $updatedPath
 }
 
 function Set-UserEnvironmentValue {
@@ -689,28 +425,15 @@ function Resolve-CommonCliSourceDirectories {
 
   $results = New-Object 'System.Collections.Generic.List[string]'
 
-  $programFilesRoots = New-Object 'System.Collections.Generic.List[string]'
   foreach ($programFilesRoot in @(
     $env:ProgramFiles,
     ${env:ProgramW6432},
     ${env:ProgramFiles(x86)}
   )) {
-    if (-not [string]::IsNullOrWhiteSpace($programFilesRoot)) {
-      Add-PathIfMissing -List $programFilesRoots -PathValue $programFilesRoot
+    if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+      continue
     }
-  }
 
-  $homeDrive = [System.IO.Path]::GetPathRoot($UserHome)
-  if (-not [string]::IsNullOrWhiteSpace($homeDrive)) {
-    $homeDrive = $homeDrive.TrimEnd("\")
-    Add-PathIfMissing -List $programFilesRoots -PathValue (Join-Path $homeDrive "Program Files")
-    Add-PathIfMissing -List $programFilesRoots -PathValue (Join-Path $homeDrive "Program Files (x86)")
-  }
-
-  Add-PathIfMissing -List $programFilesRoots -PathValue "C:\Program Files"
-  Add-PathIfMissing -List $programFilesRoots -PathValue "C:\Program Files (x86)"
-
-  foreach ($programFilesRoot in $programFilesRoots) {
     foreach ($candidate in @(
       (Join-Path $programFilesRoot "nodejs"),
       (Join-Path $programFilesRoot "Git\cmd"),
@@ -889,11 +612,8 @@ function Sync-PythonToolWrappers {
   foreach ($pipName in @("pip", "pip3", "pip3.14", "pip3.14-64")) {
     $destinationPath = Join-Path $DestinationDirectory ($pipName + ".cmd")
     $content = "@echo off`r`n`"$PythonCommandHost`" -m pip %*`r`n"
-    $psDestinationPath = Join-Path $DestinationDirectory ($pipName + ".ps1")
-    $psContent = New-PowerShellWrapperBodyForPythonModule -PythonExe $PythonCommandHost -ModuleName "pip"
     $createdNames.Add($pipName) | Out-Null
     Write-WrapperFile -DestinationPath $destinationPath -Content $content
-    Write-WrapperFile -DestinationPath $psDestinationPath -Content $psContent
   }
 
   foreach ($sourceDirectory in $SourceDirectories) {
@@ -920,15 +640,12 @@ function Sync-PythonToolWrappers {
 
       if ($file.Extension -eq ".exe") {
         $content = New-WrapperBodyForExecutable -TargetPath $file.FullName
-        $psContent = New-PowerShellWrapperBodyForExecutable -TargetPath $file.FullName
       } else {
         $content = New-WrapperBodyForScript -PythonExe $PythonCommandHost -ScriptPath $file.FullName
-        $psContent = New-PowerShellWrapperBodyForPythonScript -PythonExe $PythonCommandHost -ScriptPath $file.FullName
       }
 
       $createdNames.Add($toolName) | Out-Null
       Write-WrapperFile -DestinationPath $destinationPath -Content $content
-      Write-WrapperFile -DestinationPath (Join-Path $DestinationDirectory ($toolName + ".ps1")) -Content $psContent
     }
   }
 
@@ -958,10 +675,6 @@ function Sync-CommonCliWrappers {
         continue
       }
 
-      if ($toolName -ieq "codex") {
-        continue
-      }
-
       if ($createdNames.Contains($toolName)) {
         continue
       }
@@ -979,27 +692,22 @@ function Sync-CommonCliWrappers {
 
       if ($toolName -ieq "code" -and $selectedFile.Extension.ToLowerInvariant() -eq ".cmd") {
         $content = New-WrapperBodyForVsCodeCli -TargetPath $selectedFile.FullName
-        $psContent = New-PowerShellWrapperBodyForBatchScript -TargetPath $selectedFile.FullName
       } else {
         switch ($selectedFile.Extension.ToLowerInvariant()) {
           ".exe" {
             $content = New-WrapperBodyForExecutable -TargetPath $selectedFile.FullName
-            $psContent = New-PowerShellWrapperBodyForExecutable -TargetPath $selectedFile.FullName
             break
           }
           ".cmd" {
             $content = New-WrapperBodyForBatchScript -TargetPath $selectedFile.FullName
-            $psContent = New-PowerShellWrapperBodyForBatchScript -TargetPath $selectedFile.FullName
             break
           }
           ".bat" {
             $content = New-WrapperBodyForBatchScript -TargetPath $selectedFile.FullName
-            $psContent = New-PowerShellWrapperBodyForBatchScript -TargetPath $selectedFile.FullName
             break
           }
           ".ps1" {
             $content = New-WrapperBodyForPowerShellScript -TargetPath $selectedFile.FullName
-            $psContent = New-PowerShellWrapperBodyForPowerShellScript -TargetPath $selectedFile.FullName
             break
           }
         }
@@ -1011,7 +719,6 @@ function Sync-CommonCliWrappers {
 
       $createdNames.Add($toolName) | Out-Null
       Write-WrapperFile -DestinationPath $destinationPath -Content $content
-      Write-WrapperFile -DestinationPath (Join-Path $DestinationDirectory ($toolName + ".ps1")) -Content $psContent
     }
   }
 
@@ -1216,31 +923,6 @@ if ($SkipAclGrants) {
   }
 }
 
-$windowsRoot = $env:SystemRoot
-if ([string]::IsNullOrWhiteSpace($windowsRoot) -or -not (Test-Path $windowsRoot)) {
-  $candidateSystemDrive = if (-not [string]::IsNullOrWhiteSpace($env:SystemDrive)) { $env:SystemDrive } else { "C:" }
-  $candidateWindowsRoot = Join-Path $candidateSystemDrive "Windows"
-  if (Test-Path $candidateWindowsRoot) {
-    $windowsRoot = $candidateWindowsRoot
-  } elseif (Test-Path "C:\Windows") {
-    $windowsRoot = "C:\Windows"
-  }
-}
-
-if (-not [string]::IsNullOrWhiteSpace($windowsRoot) -and (Test-Path $windowsRoot)) {
-  $codexEnvironmentDefaults = Get-CodexEnvironmentDefaults -UserHome $UserHome -WindowsRoot $windowsRoot
-  $script:CodexWrapperEnvironmentPrelude = New-PowerShellEnvironmentPrelude -EnvironmentValues $codexEnvironmentDefaults
-
-  Write-Host ""
-  Write-Host "Windows / Codex 基础环境变量:"
-  foreach ($envName in $codexEnvironmentDefaults.Keys) {
-    Set-UserEnvironmentValue -Name $envName -Value ([string]$codexEnvironmentDefaults[$envName])
-  }
-} else {
-  Write-Warning "未能定位 Windows 目录，已跳过 SystemRoot/windir/ComSpec 设置。"
-  $script:CodexWrapperEnvironmentPrelude = "`$ErrorActionPreference = 'Stop'`r`n"
-}
-
 $codexHelperSource = Resolve-CodexHelperSource -UserHome $UserHome
 $codexHelperNames = @(
   "codex.exe",
@@ -1263,17 +945,8 @@ if ($null -ne $codexHelperSource) {
 }
 
 $stableCodexExe = Join-Path $stableCodexBin "codex.exe"
-Ensure-UserPathContains -PathValue $stableCodexBin -Prepend
+Ensure-UserPathContains -PathValue $stableCodexBin
 Set-UserEnvironmentValue -Name "CODEX_CLI_PATH" -Value $stableCodexExe
-
-$staleCodexCliWrapper = Join-Path $stableCliToolDir "codex.cmd"
-if (Test-Path $staleCodexCliWrapper) {
-  if ($DryRun) {
-    Write-Host "DRYRUN Remove-Item `"$staleCodexCliWrapper`" -Force"
-  } else {
-    Remove-Item -LiteralPath $staleCodexCliWrapper -Force
-  }
-}
 
 Write-Host ""
 Write-Host "Python tool wrapper 同步:"
@@ -1283,11 +956,9 @@ Write-Host "  Host exe   : $(if (-not [string]::IsNullOrWhiteSpace($pythonComman
 
 if (-not [string]::IsNullOrWhiteSpace($preferredPythonRoot) -and -not [string]::IsNullOrWhiteSpace($pythonCommandHost)) {
   $wrapperCount = Sync-PythonToolWrappers -DestinationDirectory $stablePythonToolDir -PreferredPythonRoot $preferredPythonRoot -PythonCommandHost $pythonCommandHost -SourceDirectories $pythonToolSourceDirectories
-  $arg0DirectoryCount = if ($SyncArg0Wrappers) { Sync-WrappersToCodexArg0 -SourceDirectory $stablePythonToolDir -UserHome $UserHome } else { 0 }
-  $arg0PowerShellDirectoryCount = if (-not $SkipArg0PowerShellWrappers) { Sync-PowerShellWrappersToCodexArg0 -SourceDirectory $stablePythonToolDir -UserHome $UserHome } else { 0 }
+  $arg0DirectoryCount = Sync-WrappersToCodexArg0 -SourceDirectory $stablePythonToolDir -UserHome $UserHome
   Write-Host "  Wrapper 数 : $wrapperCount"
-  Write-Host "  Arg0 .cmd 同步 : $(if ($SyncArg0Wrappers) { $arg0DirectoryCount } else { '跳过，避免当前 Codex 线程优先命中 .cmd wrapper' })"
-  Write-Host "  Arg0 .ps1 同步 : $(if (-not $SkipArg0PowerShellWrappers) { $arg0PowerShellDirectoryCount } else { '跳过' })"
+  Write-Host "  Arg0 同步 : $arg0DirectoryCount"
   Ensure-UserPathContains -PathValue $stablePythonToolDir -Prepend
 } else {
   Write-Warning "未找到可用的 Python 安装，已跳过 Python wrapper 同步。"
@@ -1300,11 +971,9 @@ Write-Host "  Source dirs:"
 if ($commonCliSourceDirectories.Count -gt 0) {
   $commonCliSourceDirectories | ForEach-Object { Write-Host "    - $_" }
   $commonCliWrapperCount = Sync-CommonCliWrappers -DestinationDirectory $stableCliToolDir -SourceDirectories $commonCliSourceDirectories
-  $commonCliArg0Count = if ($SyncArg0Wrappers) { Sync-WrappersToCodexArg0 -SourceDirectory $stableCliToolDir -UserHome $UserHome } else { 0 }
-  $commonCliArg0PowerShellCount = if (-not $SkipArg0PowerShellWrappers) { Sync-PowerShellWrappersToCodexArg0 -SourceDirectory $stableCliToolDir -UserHome $UserHome } else { 0 }
+  $commonCliArg0Count = Sync-WrappersToCodexArg0 -SourceDirectory $stableCliToolDir -UserHome $UserHome
   Write-Host "  Wrapper 数 : $commonCliWrapperCount"
-  Write-Host "  Arg0 .cmd 同步 : $(if ($SyncArg0Wrappers) { $commonCliArg0Count } else { '跳过，避免当前 Codex 线程优先命中 .cmd wrapper' })"
-  Write-Host "  Arg0 .ps1 同步 : $(if (-not $SkipArg0PowerShellWrappers) { $commonCliArg0PowerShellCount } else { '跳过' })"
+  Write-Host "  Arg0 同步 : $commonCliArg0Count"
   Ensure-UserPathContains -PathValue $stableCliToolDir -Prepend
 } else {
   Write-Warning "未找到常用 CLI 源目录，已跳过 common CLI wrapper 同步。"
